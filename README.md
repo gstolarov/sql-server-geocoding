@@ -56,7 +56,7 @@ The XML file I chose to create is far from being generic or extensible and may n
 In this file
 node is repeated for each shape object. Each column/attribute in the DBF file becomes an attribute in the XML file (property=value pairs). If the shape object is a poly-line (think city block), then xFrom, yFrom, xTo, yTo attributes are added to designate poly-line starting and ending points. For any other object type, I add longitude/latitude points ala Google KML files. The Shp2Xml utility will assume that all the shape file components are in the same folder and dump output to the console. So to generate XML file, run the following command from the command line:  
 
-`c:\\>Shp2Xml SHP\_file\_name > xml\_file\_name`
+`c:\>Shp2Xml SHP_file_name > xml_file_name`
 
 ## XML File Loading
 In the download file, under SQL folder, there is a LoadTiger.sql file that contains all the code described throughout the rest of the article.
@@ -135,10 +135,11 @@ from geoStreet g cross apply fnParseAddr(g.street, 0) a
 ## Address Parsing/Geo-coding
 I found it overwhelming how many different formats of the addresses I had to process. Sometimes I would get everything parsed as a separate field - number, street apt, ... Sometimes I would get address line 1, city and zip. Sometimes it was address line 1 and address line 2. Also, sometimes I need geocoding performed in C# code where stored procedures are easy to execute, but sometimes I need it in SQL-Server script, where stored procedure means also a cursor with all the complexities of looping, checking error codes, ... So I decided to make it easy on myself: My geo-coding will be available as table-valued function, that would also perform address parsing and accept only one address string in the following format:
 
-`StrNum StrDir StrName StrType # apt, City State Zip
+`StrNum StrDir StrName StrType # apt, City State Zip`
+
 Where:
 
-StrNum is numeric
+- StrNum is numeric
 - StrDir - one of the N.S.E.W, North, South, East, West
 - StrType - one of possible street types
 - \# - separates possible apartment number
@@ -190,7 +191,7 @@ select 	@lat = (@ratio * (@tolat - @frlat) + @frlat) ,
 	@lon = (@ratio * (@tolon - @frlon) + @frlon)
 ```
 
-##Using the Code
+## Using the Code
 Once you run LoadTiger.sql script, it will create a geoStreet table and fnParseAddr function. The table is used by the function to geo-code addresses. The function takes two parameters:
 - Address - see previous section about accepted address formats
 - ifGeocode - 0/1 flag to specify if only address parsing is needed or complete geo-coding needs to be performed
