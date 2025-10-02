@@ -1,0 +1,338 @@
+
+<!DOCTYPE html>
+<html lang="en-US">
+  <head>
+    <meta charset="UTF-8">
+    <meta http-equiv="X-UA-Compatible" content="IE=edge">
+    <meta name="viewport" content="width=device-width, initial-scale=1">
+	<meta name="google-site-verification" content="VkGEZbIgX7ZPSXiBtOSXHzRS6n5vR7ydW3WdnO9S_bI" />
+
+<!-- Begin Jekyll SEO tag v2.8.0 -->
+<title>Geocoding with SQL-Server | sql-server-geocoding</title>
+<meta name="generator" content="Jekyll v3.10.0" />
+<meta property="og:title" content="Geocoding with SQL-Server" />
+<meta property="og:locale" content="en_US" />
+<meta name="description" content="Geocoding with SQL-Server" />
+<meta property="og:description" content="Geocoding with SQL-Server" />
+<link rel="canonical" href="https://gstolarov.github.io/sql-server-geocoding/" />
+<meta property="og:url" content="https://gstolarov.github.io/sql-server-geocoding/" />
+<meta property="og:site_name" content="sql-server-geocoding" />
+<meta property="og:type" content="website" />
+<meta name="twitter:card" content="summary" />
+<meta property="twitter:title" content="Geocoding with SQL-Server" />
+<script type="application/ld+json">
+{"@context":"https://schema.org","@type":"WebSite","description":"Geocoding with SQL-Server","headline":"Geocoding with SQL-Server","name":"sql-server-geocoding","url":"https://gstolarov.github.io/sql-server-geocoding/"}</script>
+<!-- End Jekyll SEO tag -->
+
+    <link rel="stylesheet" href="/sql-server-geocoding/assets/css/style.css?v=59a7fe938bc953d8192c4e3cdc95290f282a0fd9">
+    <!-- start custom head snippets, customize with your own _includes/head-custom.html file -->
+
+<!-- Setup Google Analytics -->
+
+
+
+<!-- You can set your favicon here -->
+<!-- link rel="shortcut icon" type="image/x-icon" href="/sql-server-geocoding/favicon.ico" -->
+
+<!-- end custom head snippets -->
+
+  </head>
+  <body>
+    <div class="container-lg px-3 my-5 markdown-body">
+      
+      <h1><a href="https://gstolarov.github.io/sql-server-geocoding/">sql-server-geocoding</a></h1>
+      
+
+      <h1 id="geocoding-with-sql-server">Geocoding with SQL-Server</h1>
+
+<h2 id="introduction">Introduction</h2>
+<p>This article touches on a couple of issues related to geo-coding, in particular:<br />
+Converting ESRI shape file to XML</p>
+<ul>
+  <li>Parsing address</li>
+  <li>Geo-coding address</li>
+</ul>
+
+<p>All of the geo-coding is implemented as a SQL-Server function, and as such offers performance gains impossible to achieve by using other methods such as web-services or COM interface with mapping software (aka MapPoint).</p>
+
+<h2 id="background">Background</h2>
+<p>My first experimentation with geo-coding probably goes 3 years back. Initially using some of the more widely available services such as Google or Yahoo web-service did do the job. At some point however, I started to hit the wall with this implementation. Namely there were 2 restrictions I had to deal with:</p>
+<ul>
+  <li>Sending address over the public web was not acceptable for some of the projects I was working on.</li>
+  <li>Every now and then I had to geo-code hundreds of thousands of records of legacy data.</li>
+</ul>
+
+<p>Researching the web, I found wonderful John Sample’s article (http://www.johnsample.com/articles/GeocodeWithSqlServer.aspx). His research really helped. Apparently everything you need is right there, along with gobs of free data - US Census Bureau Tiger/Line data that covers latitude/longitude of every city block of every county in US. Once you have a simple text file, you just load it into the database and then using interpolation techniques you can fairly easily find latitude/longitude of every address in US.<br />
+That was working for me for a couple of years. Then I started to discover problems that I primarily blame on the housing boom of 2005-2007 :-). See, during this time there was apparently quite a bit of new construction and I started to notice a lot of new addresses that didn’t exist in the Tiger/Line file I got when I started. No worries, I thought, I just will get a latest Tiger/Line file and will be on my way. Well, guess what, US Census Bureau doesn’t provide text Tiger/Line file. Now they provide only ESRI binary shape files - and that threw a monkey wrench into my plans - I really needed some way to get the latest geo data in text format so I can load it into my SQL-server.<br />
+The rest of the article describes 3 parts of this project:</p>
+<ul>
+  <li>Conversion of ESRI shape files into the XML</li>
+  <li>Loading XML data into SQL-server</li>
+  <li>SQL-server function to parse US addresses and geocode them</li>
+</ul>
+
+<h2 id="tiger-files">Tiger Files</h2>
+<p>US Census Bureau provides Topologically Integrated Geographic Encoding and Referencing system - TIGER - data. This is county-by-county geo information of every district, block, monument - pretty much anything that deserves any attention. In particular, I was interested in “All Lines” files that can be downloaded on county-by-county basis (Go to http://www2.census.gov/cgi-bin/shapefiles2009/national-files) navigate to your state and then county and download “All Lines” file). Inside this file, for each city block within the county you can find information such as address range, street name, zip code, and of course latitude/longitude for the start and the end of the street block. Initially this information was provided as an ASCII file downloads but since 2006, this information is available only as ESRI shape file.</p>
+
+<h2 id="esri-shape-files--xml-conversion">ESRI Shape Files / XML Conversion</h2>
+<p>ESRI seems to have become a de-facto standard of spatial data storage and presentation. At least their files and their file support become more and more widely available.<br />
+It is probably worth it to provide 25,000 feet overview of the shape files. Shape file is actually a set that contains at least 4 files:</p>
+<ul>
+  <li>SHP - shape files that contains actual shapes - a list of data structures with primarily an object type and list of points for each object</li>
+  <li>SHX - shape index file that tell where each object in the file is located</li>
+  <li>DBF - an old fashioned DBase database file that contains additional attributes for each shape/object. In case of Tiger/Line, this would contain street name, zip code, … But it also can contain other generic information.</li>
+  <li>PRJ - file information, such as type of encoding/projection used in the file.</li>
+</ul>
+
+<p>The fact that ESRI is a de-facto leader didn’t make my job much easier though - still took a while to get ESRI shape files converted into text format. Eventually instead of trying to find a utility that would do it for me, I started to look for libraries that I can use to do the job.<br />
+Even though I really wanted to find C# code to get the job done, eventually I settled on Shapefile C Library - <a href="http://shapelib.maptools.org/">http://shapelib.maptools.org/</a> that was the simplest thing with no dependencies. They also had plenty of samples how to get it to work, so it made my job fairly easy - open DBF and SHP files and for each object in there, just dump the corresponding XML node.</p>
+
+<h2 id="object-types">Object Types</h2>
+<p>As far as geo-coding, I was only interested in poly-lines. And for those, for simplicity sake, I was only interested in straight interpolation, so even for polylines I was interested in starting and ending points. So if your county has really long blocks with really curvy streets, you might want to look into making this process a little more precise. So in order to cut file size, when I export objects to XML file, whenever I have a poly line object, I will only export starting and ending position.<br />
+For some other projects I was involved in, I needed to export polygons. For those I’m exporting all the points - so when you look in the code, don’t be surprised.</p>
+
+<h2 id="state-plane-coordinate-conversion">State-plane Coordinate Conversion</h2>
+<p>This portion of SHP file conversion is not used for address geo-coding. However for some other projects I was involved in, I had to deal with shape files encoded in state-plane coordinate system - so called Lambert Conformal Conic projection. At the risk of being laughed at by the geo-specialists, the simple description of this coordinate system the way I understood it is as follows - in order to increase precision of the mapping process for separate small areas, one of the type of geo-coding is to select a center of the area and then provide coordinates not in latitude/longitude, but instead in something like feet to the north/west - (like a pirate map - from the old tree 20 paces to the north and 3 paces to the east). Sounds silly but it’s seems to be quite widespread. At least I had to deal with it so I had to build a module that would transparently check shape file projection system and convert it on the fly to latitude/longitude.<br />
+For the basis of conversion, I chose the code published by Montana State Library and made it a little more generic, in particular add the code to get the projection information from the shape’s file PRJ file.</p>
+
+<h2 id="xml-file-format">XML File Format</h2>
+<p>The XML file I chose to create is far from being generic or extensible and may not quite satisfy all you needs, but it did get the job done for me:</p>
+
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>&lt;layer&gt;
+&lt;shp property='value' property='value' property='value' xFrom='lon' yFrom='lat' xTo='lon' yTo='lat'&gt;
+      lon lat lon lat ...
+&lt;/shp&gt;
+&lt;/layer&gt;
+</code></pre></div></div>
+
+<p>In this file
+node is repeated for each shape object. Each column/attribute in the DBF file becomes an attribute in the XML file (property=value pairs). If the shape object is a poly-line (think city block), then xFrom, yFrom, xTo, yTo attributes are added to designate poly-line starting and ending points. For any other object type, I add longitude/latitude points ala Google KML files. The Shp2Xml utility will assume that all the shape file components are in the same folder and dump output to the console. So to generate XML file, run the following command from the command line:</p>
+
+<p><code class="language-plaintext highlighter-rouge">c:\&gt;Shp2Xml SHP_file_name &gt; xml_file_name</code></p>
+
+<h2 id="xml-file-loading">XML File Loading</h2>
+<p>In the download file, under SQL folder, there is a LoadTiger.sql file that contains all the code described throughout the rest of the article.
+The loading portion is pretty simple:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>DECLARE @hDoc int
+DECLARE @xml xml
+set @xml=(select convert(xml,BulkColumn, 2)
+From openrowset(Bulk 'C:\temp\geotrans\edges.xml', single_blob) [rowsetresults])
+exec sp_xml_preparedocument @hDoc OUTPUT, @xml
+SELECT *
+into geoStreet
+FROM OPENXML(@hDoc, 'layer/shp', 1)
+WITH (
+	tlid		int '@TLID',
+	prfx		varchar(2)   ,
+	street		varchar(50)  '@FULLNAME',
+	type		varchar(4)   ,
+	LFROMADD	varchar(20) '@LFROMADD',
+	LTOADD		varchar(20) '@LTOADD',
+	RFROMADD	varchar(20) '@RFROMADD',
+	RTOADD		varchar(20) '@RTOADD',
+	fraddr		int  ,
+	toaddr		int  ,
+	zipl		varchar(5)   '@ZIPL',
+	zipr		varchar(5)   '@ZIPR',
+	frlon		decimal(9,5) '@xFrom',
+	frlat		decimal(9,5) '@yFrom',
+	tolon		decimal(9,5) '@xTo',
+	tolat		decimal(9,5) '@yTo'
+)
+exec sp_xml_removedocument @hDoc
+</code></pre></div></div>
+
+<p>This segment loads c:\temp\geotrans\edges.xml (change as needed) into the geoStreet table. As you can see, I load only the following columns/attributes: FULLNAME, LFROMADD, LTOADD, RFROMADD, RTOADD, ZIPL, ZIPR, xFrom, yFrom, xTo, yTo.</p>
+
+<p>The rest of the loading code is dedicated to the data clean up:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>delete from geoStreet where street is null 
+	or lfromadd is null or ltoadd is null
+	or rfromadd is null or rtoadd is null
+</code></pre></div></div>
+
+<p>This segment removes non-street block elements from the data set - freeways, on/off ramps, rivers, … Also as you can see, Tiger/Line data provides separate information for left/right side of the street. Sometimes the address numbers for left and right sides of the street are not the way I would like them - either non-numeric for one of the sides, or sometimes the addresses for the left side can be ascending, whereas for the right side they are descending - weird, hah! In order to make geo-coding process easier, I would like from and to addresses to be predictable ascending order. So the code below does clean this portion up:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>update geoStreet set lFromAdd=rFromAdd where isnumeric(lFromAdd)=0
+update geoStreet set rFromAdd=lFromAdd where isnumeric(rFromAdd)=0
+update geoStreet set lToAdd=rToAdd where isnumeric(lToAdd)=0
+update geoStreet set rToAdd=lToAdd where isnumeric(rToAdd)=0
+update g set g.prfx=a.dir, g.type=a.tp, g.street=a.street
+from geoStreet g cross apply fnParseAddr(g.street, 0) a
+
+declare @b varchar(20), @tmpi int, @tmpn numeric(9,5), @tmpt numeric(9,5)
+update geoStreet set 
+	@b=LFROMADD, LFROMADD=LTOADD, LTOADD=@b
+where   convert(int, LFROMADD)&gt;convert(int, LTOADD)
+	and convert(int, RFROMADD)&lt;convert(int, RTOADD)
+update geoStreet set 
+	toaddr=(case when convert(int, RTOADD) &gt; convert(int, LTOADD) _
+	then RTOADD else LTOADD end),
+	fraddr=(case when convert(int, RFROMADD) &lt; convert(int, LFROMADD) _
+	then RFROMADD else LFROMADD end)
+where toaddr is null and fraddr is null
+update geoStreet set 
+	@tmpi=frAddr, frAddr=toAddr, toAddr=@tmpi,
+	@tmpn=frlon, frlon=tolon, tolon=@tmpn,
+	@tmpt=frlat, frlat=tolat, tolat=@tmpt
+where frAddr &gt; toAddr
+</code></pre></div></div>
+<p>The only remaining portion is dealing with the fact that the “All Lines” portion of the Tiger/Line data provides street name as one string. Instead of trying to join multiple files, I decided to hand-parse street name into the direction/name/type elements (see more about parsing later):</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>update g set g.prfx=a.dir, g.type=a.tp, g.street=a.street
+from geoStreet g cross apply fnParseAddr(g.street, 0) a
+</code></pre></div></div>
+
+<h2 id="address-parsinggeo-coding">Address Parsing/Geo-coding</h2>
+<p>I found it overwhelming how many different formats of the addresses I had to process. Sometimes I would get everything parsed as a separate field - number, street apt, … Sometimes I would get address line 1, city and zip. Sometimes it was address line 1 and address line 2. Also, sometimes I need geocoding performed in C# code where stored procedures are easy to execute, but sometimes I need it in SQL-Server script, where stored procedure means also a cursor with all the complexities of looping, checking error codes, … So I decided to make it easy on myself: My geo-coding will be available as table-valued function, that would also perform address parsing and accept only one address string in the following format:</p>
+
+<p><code class="language-plaintext highlighter-rouge">StrNum StrDir StrName StrType # apt, City State Zip</code></p>
+
+<p>Where:</p>
+
+<ul>
+  <li>StrNum is numeric</li>
+  <li>StrDir - one of the N.S.E.W, North, South, East, West</li>
+  <li>StrType - one of possible street types</li>
+  <li># - separates possible apartment number</li>
+  <li>, - first comma separates first address line from second address line</li>
+  <li>Zip - 5 number optional zip code</li>
+  <li>State - 2 character optional state</li>
+  <li>City - everything else on the second address line
+So the first portion of the fnParseAddr performs just that - chipping away string tokens one at a time trying to parse address:</li>
+</ul>
+
+<p>Find the first comma to split address into lines 1 and 2:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>set @i = charindex(',', @str)
+if (@i &gt; 0) 
+	select  @city = replace(ltrim(substring(@str, @i+1, 999)), ',', ' '),
+		@str = replace(rtrim(substring(@str, 1, @i-1)), ',', ' ')
+</code></pre></div></div>
+<p>Check if the first token is a number and load up street number if so:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>set @i = charindex(' ', @str)
+if (@i &gt; 0 and isnumeric(substring(@str, 1, @i))=1) 
+	select  @num = rtrim(substring(@str, 1, @i-1)), 
+		@str = ltrim(substring(@str, @i+1, 999))
+</code></pre></div></div>
+<p>Check if the second token is street direction (North/East/West/South):</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>set @i = charindex(' ', @str)
+if (@i &gt; 0 and substring(@str, 1, @i-1) IN ('N','No','North','South','S','West','W','East','E'))
+	select  @dir = rtrim(substring(@str, 1, 1)), 
+		@str = ltrim(substring(@str, @i+1, 999)) 
+</code></pre></div></div>
+<p>And so on and so forth.</p>
+
+<p>Once the address is parsed, we can try to figure out which city block it belongs to. Having all the city blocks loaded up in the database should make this job trivial - simple select where street name equals to what specified, number falls in the range. However street address is rarely correct. Most of the time, people don’t know if it’s a street or an avenue. North, south east and west street direction is rarely specified. Zip code is often wrong. So instead of simple match, we need to have a weights system - each match increases the chance of the correct address being found - if zip code matches add 3 to the score, if address is in the range add 2, if street type or direction matches - add 1. Use the best match record.</p>
+
+<p>This translates to the following SQL code:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>@wt = (case when @str=street then 5 else 0 end)
+	+	(case when @zip IN (zipl, zipr) then 3 else 0 end)
+	+ 	(case when @num between fraddr and toaddr then 2 else 0 end)
+	+ 	(case when @dir=prfx then 1 else 0 end)
+	+ 	(case when @tp=type then 1 else 0 end)
+</code></pre></div></div>
+<p>Now that the record that best matches our address is found, we need to find the actual latitude/longitude. To do that, we use interpolation: if city block contains addresses from 100 to 200, and we are looking for the house #125, it should be about a quarter from the start of the block:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>select @ratio = 0.5
+if @num between @fraddr and @toaddr or @num between @toaddr and @fraddr 
+	select @ratio = 1.0 *(@num - @fraddr) / (@toaddr - @fraddr)
+select 	@lat = (@ratio * (@tolat - @frlat) + @frlat) , 
+	@lon = (@ratio * (@tolon - @frlon) + @frlon)
+</code></pre></div></div>
+
+<h2 id="using-the-code">Using the Code</h2>
+<p>Once you run LoadTiger.sql script, it will create a geoStreet table and fnParseAddr function. The table is used by the function to geo-code addresses. The function takes two parameters:</p>
+<ul>
+  <li>Address - see previous section about accepted address formats</li>
+  <li>ifGeocode - 0/1 flag to specify if only address parsing is needed or complete geo-coding needs to be performed</li>
+</ul>
+
+<p>The function returns a table with just 1 row in it:</p>
+
+<table>
+  <thead>
+    <tr>
+      <th> </th>
+      <th> </th>
+      <th> </th>
+    </tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>num</td>
+      <td>varchar(20)</td>
+      <td>street number</td>
+    </tr>
+    <tr>
+      <td>dir</td>
+      <td>varchar(1)</td>
+      <td>street direction</td>
+    </tr>
+    <tr>
+      <td>street</td>
+      <td>varchar(100)</td>
+      <td>street name</td>
+    </tr>
+    <tr>
+      <td>tp</td>
+      <td>varchar(20)</td>
+      <td>street type</td>
+    </tr>
+    <tr>
+      <td>apt</td>
+      <td>varchar(20)</td>
+      <td>apartment</td>
+    </tr>
+    <tr>
+      <td>city</td>
+      <td>varchar(100)</td>
+      <td>city</td>
+    </tr>
+    <tr>
+      <td>st</td>
+      <td>varchar(2)</td>
+      <td>state</td>
+    </tr>
+    <tr>
+      <td>zip</td>
+      <td>varchar(5)</td>
+      <td>zip</td>
+    </tr>
+    <tr>
+      <td>lat</td>
+      <td>decimal(9,5)</td>
+      <td>latitude</td>
+    </tr>
+    <tr>
+      <td>lon</td>
+      <td>decimal(9,5)</td>
+      <td>longitude</td>
+    </tr>
+  </tbody>
+</table>
+
+<p>To just parse address, use the following SQL-command:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>select * from fnParseAddr('123 main st', 0)
+</code></pre></div></div>
+<p>To parse and geocode address, issue the following select statement:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>select * from fnParseAddr('123 main st', 1)
+</code></pre></div></div>
+<p>To do batch geo-coding against some table in the database, issue the following command:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>select tbl.stname, a.*
+from SomeTable tbl 
+	cross apply fnParseAddr(tbl.stname, 1) a
+</code></pre></div></div>
+<p>or, similarly to update information:</p>
+<div class="language-plaintext highlighter-rouge"><div class="highlight"><pre class="highlight"><code>update tbl set tbl.lat=a.lat, tbl.lon=a.lon 
+from SomeTable tbl 
+	cross apply fnParseAddr(tbl.stname, 1) a
+where a.lat != 0 
+</code></pre></div></div>
+
+
+      
+      <div class="footer border-top border-gray-light mt-5 pt-3 text-right text-gray">
+        This site is open source. <a href="https://github.com/gstolarov/sql-server-geocoding/edit/main/README.md">Improve this page</a>.
+      </div>
+      
+    </div>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/anchor-js/4.1.0/anchor.min.js" integrity="sha256-lZaRhKri35AyJSypXXs4o6OPFTbTmUoltBbDCbdzegg=" crossorigin="anonymous"></script>
+    <script>anchors.add();</script>
+  </body>
+</html>
