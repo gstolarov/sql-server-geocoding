@@ -9,7 +9,7 @@ Converting ESRI shape file to XML
 All of the geo-coding is implemented as a SQL-Server function, and as such offers performance gains impossible to achieve by using other methods such as web-services or COM interface with mapping software (aka MapPoint).
 
 ## Background
-My first experimentation with geo-coding probably goes 3 years back. Initially using some of the more widely available services such as Google or Yahoo web-service did do the job. At some point however, I started to hit the wall with this implementation. Namely there were 2 restrictions I had to deal with:
+My first experimentation with geo-coding probably goes back to 2005. Initially using some of the more widely available services such as Google or Yahoo web-service did do the job. At some point however, I started to hit the wall with this implementation. Namely there were 2 restrictions I had to deal with:
 *   Sending address over the public web was not acceptable for some of the projects I was working on.
 *   Every now and then I had to geo-code hundreds of thousands of records of legacy data.
 
