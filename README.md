@@ -1,4 +1,4 @@
-# [Geocoding with SQL-Server](https://github.com/gstolarov/sql-server-geocoding)
+# Geocoding with SQL-Server ([GitHub](https://github.com/gstolarov/sql-server-geocoding))
 
 ## Introduction
 This article touches on a couple of issues related to geo-coding, in particular:  
